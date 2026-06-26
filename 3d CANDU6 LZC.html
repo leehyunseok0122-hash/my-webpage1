@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CANDU LZC 시뮬레이션</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&display=swap');
+        
+        body {
+            font-family: 'Noto Sans KR', sans-serif;
+            background-color: #0f172a; /* slate-900 */
+            color: #e2e8f0; /* slate-200 */
+        }
+
+        .calandria {
+            background: radial-gradient(circle, rgba(30,58,138,0.2) 0%, rgba(15,23,42,1) 80%);
+            border: 4px solid #475569;
+            box-shadow: 0 0 50px rgba(59, 130, 246, 0.1) inset;
+            transition: all 1s ease-in-out;
+        }
+
+        .core-glow {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(239,68,68,0.4) 0%, rgba(59,130,246,0.1) 60%, transparent 80%);
+            opacity: 0.5;
+            transition: opacity 1s ease-in-out, background 1s ease-in-out;
+            mix-blend-mode: screen;
+        }
+
+        .lzc-compartment {
+            background-color: rgba(255, 255, 255, 0.05);
+            border: 2px solid #64748b;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .lzc-water {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            background: linear-gradient(to top, #3b82f6, #60a5fa);
+            transition: height 1s ease-in-out;
+            opacity: 0.8;
+            box-shadow: 0 0 10px #60a5fa;
+        }
+
+        .fuel-channel {
+            height: 12px;
+            background: linear-gradient(to right, #475569, #ef4444, #475569);
+            border-radius: 6px;
+            margin-bottom: 16px;
+            opacity: 0.7;
+            transition: opacity 1s ease-in-out;
+        }
+
+        .glass-panel {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col p-4 md:p-8">
+
+    <div class="max-w-6xl mx-auto w-full flex-grow flex flex-col gap-6">
+        <!-- Header -->
+        <header class="text-center mb-4">
+            <h1 class="text-3xl md:text-4xl font-bold text-white mb-2">CANDU 액체영역제어기(LZC) 작동 시뮬레이션</h1>
+            <p class="text-slate-400">구획 내 경수(H₂O) 수위를 조절하여 중성자를 흡수하고 원자로 출력을 미세하게 제어합니다.</p>
+        </header>
+
+        <!-- Main Content -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8 flex-grow">
+            
+            <!-- Visualization (Reactor Core 3D) -->
+            <div class="lg:col-span-2 relative flex items-center justify-center bg-slate-900 rounded-2xl border border-slate-700 min-h-[500px] overflow-hidden cursor-move" id="canvas-container">
+                <!-- 3D Canvas will be injected here -->
+                <div class="absolute top-4 left-4 z-10 bg-slate-800/80 p-3 rounded text-xs text-slate-300 pointer-events-none border border-slate-600">
+                    <p class="font-bold text-white mb-1">🔍 3D 뷰어 조작법</p>
+                    <p>마우스 드래그: 원자로 3D 회전</p>
+                </div>
+                
+                <!-- LZC 칼럼 상태 단순도 (HUD) -->
+                <div class="absolute top-4 right-4 z-10 bg-slate-800/80 p-4 rounded-xl text-xs text-slate-300 border border-slate-600 backdrop-blur-sm w-28 flex flex-col items-center">
+                    <p class="font-bold text-white mb-3 text-center">LZC 상태</p>
+                    <div class="w-10 h-[180px] bg-slate-900 border border-slate-500 rounded-md flex flex-col justify-between p-1 relative overflow-hidden">
+                        <!-- Top -->
+                        <div class="flex-1 w-full relative border-b border-slate-600/50">
+                            <div id="hudWaterTop" class="absolute bottom-0 left-0 w-full bg-gradient-to-t from-blue-600 to-blue-400 transition-all duration-300" style="height: 50%;"></div>
+                            <span class="absolute inset-0 flex items-center justify-center font-bold text-white z-10 drop-shadow-md text-[10px]">상부</span>
+                        </div>
+                        <!-- Mid -->
+                        <div class="flex-1 w-full relative border-b border-slate-600/50">
+                            <div id="hudWaterMid" class="absolute bottom-0 left-0 w-full bg-gradient-to-t from-blue-600 to-blue-400 transition-all duration-300" style="height: 50%;"></div>
+                            <span class="absolute inset-0 flex items-center justify-center font-bold text-white z-10 drop-shadow-md text-[10px]">중부</span>
+                        </div>
+                        <!-- Bot -->
+                        <div class="flex-1 w-full relative">
+                            <div id="hudWaterBot" class="absolute bottom-0 left-0 w-full bg-gradient-to-t from-blue-600 to-blue-400 transition-all duration-300" style="height: 50%;"></div>
+                            <span class="absolute inset-0 flex items-center justify-center font-bold text-white z-10 drop-shadow-md text-[10px]">하부</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Control Panel -->
+            <div class="glass-panel rounded-2xl p-6 flex flex-col gap-6">
+                
+                <!-- Status Dashboard -->
+                <div class="bg-slate-800 rounded-xl p-4 border border-slate-700">
+                    <h3 class="text-lg font-bold text-white mb-4">현재 상태</h3>
+                    
+                    <div class="flex justify-between items-center mb-2">
+                        <span class="text-slate-300">원자로 출력</span>
+                        <span id="powerReadout" class="text-xl font-bold text-orange-400">100%</span>
+                    </div>
+                    <div class="w-full bg-slate-700 rounded-full h-2.5 mb-6">
+                        <div id="powerBar" class="bg-gradient-to-r from-yellow-400 to-orange-500 h-2.5 rounded-full" style="width: 100%"></div>
+                    </div>
+
+                    <div class="flex justify-between items-center mb-2">
+                        <span class="text-slate-300">평균 LZC 수위 (경수)</span>
+                        <span id="lzcReadout" class="text-xl font-bold text-blue-400">50%</span>
+                    </div>
+                    <div class="w-full bg-slate-700 rounded-full h-2.5 mb-2">
+                        <div id="lzcBar" class="bg-blue-500 h-2.5 rounded-full" style="width: 50%"></div>
+                    </div>
+                    <p class="text-xs text-slate-400 mt-2">* 3D 뷰어에서 제어봉, LZC 수위, 연료 채널 온도 변화를 확인하세요.</p>
+                    <div class="mt-4 p-3 bg-slate-700/50 rounded-lg text-xs">
+                        <p class="font-bold text-slate-200 mb-1">외부 LZC 계통 구성요소:</p>
+                        <ul class="list-disc pl-4 text-slate-400">
+                            <li><span class="text-blue-400">■</span> 펌프 (하단, 경수 주입)</li>
+                            <li><span class="text-slate-300">■</span> 열교환기 (중단, 순환수 냉각)</li>
+                            <li><span class="text-yellow-500">■</span> 압축기 (상단, 헬륨 가스 압력 조절)</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- 수동 제어 (미세조정) -->
+                <div class="bg-slate-800 rounded-xl p-4 border border-slate-700">
+                    <div class="flex justify-between items-center mb-2">
+                        <h3 class="text-lg font-bold text-white">수동 미세 출력 조절</h3>
+                        <span id="manualPowerDisplay" class="text-sm font-bold text-orange-400">100%</span>
+                    </div>
+                    <p class="text-xs text-slate-400 mb-3">슬라이더를 움직여 목표 출력을 미세 조정하세요. LZC 수위가 연동되어 중성자 흡수량을 조절합니다.</p>
+                    <input type="range" id="manualPowerSlider" min="60" max="120" value="100" class="w-full h-2 bg-slate-600 rounded-lg appearance-none cursor-pointer mb-2 accent-blue-500">
+                    <div class="flex justify-between text-[10px] text-slate-500 font-mono">
+                        <span>60%</span>
+                        <span>100%</span>
+                        <span>120%</span>
+                    </div>
+                </div>
+
+                <!-- Controls -->
+                <div class="flex flex-col gap-4">
+                    <h3 class="text-lg font-bold text-white">자동 시나리오 재생</h3>
+                    
+                    <button onclick="playScenario('stable')" class="w-full py-3 px-4 bg-slate-700 hover:bg-slate-600 rounded-lg text-white font-medium transition-colors border border-slate-500 flex items-center justify-center gap-2">
+                        ▶ 정상 출력 유지 (100%)
+                    </button>
+                    <button onclick="playScenario('powerSpike')" class="w-full py-3 px-4 bg-red-900/50 hover:bg-red-800/60 rounded-lg text-red-200 font-medium transition-colors border border-red-700/50 flex items-center justify-center gap-2">
+                        ▲ 출력 급상승 ➜ 제어봉/LZC 개입
+                    </button>
+                    <button onclick="playScenario('powerDrop')" class="w-full py-3 px-4 bg-blue-900/50 hover:bg-blue-800/60 rounded-lg text-blue-200 font-medium transition-colors border border-blue-700/50 flex items-center justify-center gap-2">
+                        ▼ 출력 저하 ➜ 제어봉/LZC 인출
+                    </button>
+                </div>
+
+                <!-- Logs -->
+                <div class="flex-grow bg-slate-900 rounded-xl p-4 border border-slate-700 overflow-y-auto max-h-[200px]" id="logContainer">
+                    <div class="text-sm text-slate-500 mb-2 border-b border-slate-800 pb-2">작동 로그</div>
+                    <div id="logs" class="flex flex-col gap-1 text-xs font-mono">
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // DOM Elements
+        const powerReadout = document.getElementById('powerReadout');
+        const powerBar = document.getElementById('powerBar');
+        const lzcReadout = document.getElementById('lzcReadout');
+        const lzcBar = document.getElementById('lzcBar');
+        const logs = document.getElementById('logs');
+        const logContainer = document.getElementById('logContainer');
+        const canvasContainer = document.getElementById('canvas-container');
+
+        // Manual Control & HUD Elements
+        const manualPowerSlider = document.getElementById('manualPowerSlider');
+        const manualPowerDisplay = document.getElementById('manualPowerDisplay');
+        const hudWaterTop = document.getElementById('hudWaterTop');
+        const hudWaterMid = document.getElementById('hudWaterMid');
+        const hudWaterBot = document.getElementById('hudWaterBot');
+
+        let currentScenario = null;
+
+        // --- Three.js 3D Setup ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0f172a); 
+
+        const camera = new THREE.PerspectiveCamera(45, canvasContainer.clientWidth / canvasContainer.clientHeight, 0.1, 1000);
+        camera.position.set(220, 140, 240); // 외부 계통이 보이도록 시야 확장
+        camera.lookAt(-40, 0, 0);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        canvasContainer.appendChild(renderer.domElement);
+
+        window.addEventListener('resize', () => {
+            camera.aspect = canvasContainer.clientWidth / canvasContainer.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
+        });
+
+        // Mouse Controls
+        let isDragging = false;
+        let previousMousePosition = { x: 0, y: 0 };
+        let targetRotation = { x: 0.3, y: -0.6 };
+        let currentRotation = { x: 0.3, y: -0.6 };
+
+        canvasContainer.addEventListener('mousedown', (e) => { isDragging = true; });
+        canvasContainer.addEventListener('mousemove', (e) => {
+            if (isDragging) {
+                const deltaMove = {
+                    x: e.offsetX - previousMousePosition.x,
+                    y: e.offsetY - previousMousePosition.y
+                };
+                targetRotation.y += deltaMove.x * 0.01;
+                targetRotation.x += deltaMove.y * 0.01;
+                targetRotation.x = Math.max(-Math.PI/2, Math.min(Math.PI/2, targetRotation.x));
+            }
+            previousMousePosition = { x: e.offsetX, y: e.offsetY };
+        });
+        window.addEventListener('mouseup', () => { isDragging = false; });
+        canvasContainer.addEventListener('mouseleave', () => { isDragging = false; });
+
+        // Lights
+        scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6);
+        directionalLight.position.set(100, 200, 50);
+        scene.add(directionalLight);
+        
+        const coreLight = new THREE.PointLight(0x3b82f6, 2, 300);
+        scene.add(coreLight);
+
+        // Core Group
+        const coreGroup = new THREE.Group();
+        scene.add(coreGroup);
+
+        // 1. Calandria (Reactor Vessel)
+        const calandriaGeo = new THREE.CylinderGeometry(80, 80, 160, 32);
+        calandriaGeo.rotateZ(Math.PI / 2);
+        const calandriaMat = new THREE.MeshPhysicalMaterial({
+            color: 0x475569, transparent: true, opacity: 0.2, roughness: 0.1, metalness: 0.8, side: THREE.DoubleSide
+        });
+        coreGroup.add(new THREE.Mesh(calandriaGeo, calandriaMat));
+
+        // 2. Fuel Channels
+        const fuelChannels = [];
+        const fuelGeo = new THREE.CylinderGeometry(2.5, 2.5, 170, 16);
+        fuelGeo.rotateZ(Math.PI / 2);
+        const fuelMat = new THREE.MeshStandardMaterial({ color: 0x3b82f6, emissive: 0x1e3a8a, emissiveIntensity: 0.5 });
+
+        for(let i = -3; i <= 3; i++) {
+            for(let j = -3; j <= 3; j++) {
+                if(i*i + j*j <= 12) { 
+                    const tube = new THREE.Mesh(fuelGeo, fuelMat.clone());
+                    tube.position.set(0, i * 16, j * 16);
+                    coreGroup.add(tube);
+                    fuelChannels.push(tube);
+                }
+            }
+        }
+
+        // 3. Control Rods & Shutoff Rods
+        const controlRods = [];
+        const rodGeo = new THREE.CylinderGeometry(1.5, 1.5, 120, 16);
+        const rodMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.9, roughness: 0.2 });
+        const rodPositions = [[-30, 0], [30, 0], [0, -30], [0, 30], [-20, -20], [20, 20], [-40, 20], [40, -20]];
+
+        rodPositions.forEach(pos => {
+            const rod = new THREE.Mesh(rodGeo, rodMat);
+            rod.position.set(pos[0], 90, pos[1]);
+            coreGroup.add(rod);
+            controlRods.push(rod);
+        });
+
+        // 4. LZC Tubes
+        const lzcWaterMeshes = [];
+        const lzcGeo = new THREE.CylinderGeometry(4, 4, 140, 16);
+        const lzcMat = new THREE.MeshPhysicalMaterial({ color: 0xffffff, transparent: true, opacity: 0.15, transmission: 0.9 });
+        const waterGeo = new THREE.CylinderGeometry(3.5, 3.5, 1, 16); 
+        waterGeo.translate(0, 0.5, 0); 
+        const waterMat = new THREE.MeshBasicMaterial({ color: 0x60a5fa, transparent: true, opacity: 0.8 });
+
+        const lzcPositions = [[-15, 15], [15, -15], [0, 0]]; 
+        lzcPositions.forEach(pos => {
+            const tube = new THREE.Mesh(lzcGeo, lzcMat);
+            tube.position.set(pos[0], 0, pos[1]);
+            coreGroup.add(tube);
+
+            const water = new THREE.Mesh(waterGeo, waterMat);
+            water.position.set(pos[0], -70, pos[1]); 
+            water.scale.y = 70; 
+            coreGroup.add(water);
+            lzcWaterMeshes.push(water);
+        });
+
+        // 5. Detectors (Flux Detectors)
+        const detectors = [];
+        const detectorGeo = new THREE.BoxGeometry(4, 4, 4);
+        const detectorMat = new THREE.MeshBasicMaterial({ color: 0x10b981, transparent: true }); 
+        const detPositions = [[40, 20, 0], [-40, -20, 0], [0, 40, 30], [0, -40, -30]];
+        detPositions.forEach(pos => {
+            const det = new THREE.Mesh(detectorGeo, detectorMat.clone());
+            det.position.set(...pos);
+            coreGroup.add(det);
+            detectors.push(det);
+        });
+
+        // 6. External LZC Systems (Pump, Heat Exchanger, Compressor)
+        const extSystemGroup = new THREE.Group();
+        extSystemGroup.position.set(-130, 0, 0);
+        coreGroup.add(extSystemGroup);
+
+        // 6a. Pump
+        const pumpGeo = new THREE.CylinderGeometry(12, 12, 20, 16);
+        pumpGeo.rotateZ(Math.PI / 2);
+        const pumpMat = new THREE.MeshStandardMaterial({ color: 0x1e40af, metalness: 0.7, roughness: 0.3 });
+        const pump = new THREE.Mesh(pumpGeo, pumpMat);
+        pump.position.set(0, -60, 0);
+        extSystemGroup.add(pump);
+
+        // 6b. Heat Exchanger (Cooler)
+        const hxGeo = new THREE.CylinderGeometry(15, 15, 50, 16);
+        const hxMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.5, roughness: 0.4 });
+        const heatExchanger = new THREE.Mesh(hxGeo, hxMat);
+        heatExchanger.position.set(0, 0, 0);
+        extSystemGroup.add(heatExchanger);
+
+        // 6c. Helium Compressor
+        const compGeo = new THREE.BoxGeometry(24, 20, 24);
+        const compMat = new THREE.MeshStandardMaterial({ color: 0xd97706, metalness: 0.6, roughness: 0.5 });
+        const compressor = new THREE.Mesh(compGeo, compMat);
+        compressor.position.set(0, 60, 0);
+        extSystemGroup.add(compressor);
+
+        // 6d. Piping (Connecting to Calandria)
+        function createPipe(points, color) {
+            const curve = new THREE.CatmullRomCurve3(points);
+            const tubeGeo = new THREE.TubeGeometry(curve, 20, 2.5, 8, false);
+            const tubeMat = new THREE.MeshStandardMaterial({ color: color, metalness: 0.4 });
+            return new THREE.Mesh(tubeGeo, tubeMat);
+        }
+
+        // Pipe: Pump -> Calandria (Water Supply)
+        const pipeSupply = createPipe([
+            new THREE.Vector3(-130, -60, 0),
+            new THREE.Vector3(-80, -60, 0),
+            new THREE.Vector3(-60, -75, 0),
+            new THREE.Vector3(0, -75, 0)
+        ], 0x3b82f6);
+        coreGroup.add(pipeSupply);
+
+        // Pipe: Calandria -> HX (Water Return)
+        const pipeReturn = createPipe([
+            new THREE.Vector3(0, 75, 0),
+            new THREE.Vector3(-60, 75, 0),
+            new THREE.Vector3(-80, 25, 0),
+            new THREE.Vector3(-130, 25, 0)
+        ], 0x60a5fa);
+        coreGroup.add(pipeReturn);
+
+        // Pipe: HX -> Pump
+        const pipeHxPump = createPipe([
+            new THREE.Vector3(-130, -25, 0),
+            new THREE.Vector3(-130, -50, 0)
+        ], 0x1e3a8a);
+        coreGroup.add(pipeHxPump);
+
+        // Pipe: Compressor -> Calandria (Helium Line)
+        const pipeHelium = createPipe([
+            new THREE.Vector3(-130, 60, 12),
+            new THREE.Vector3(-80, 60, 15),
+            new THREE.Vector3(-50, 40, 15),
+            new THREE.Vector3(-20, 0, 15)
+        ], 0xfcd34d);
+        coreGroup.add(pipeHelium);
+
+        // --- Animation & State ---
+        let simState = {
+            power: 100, targetPower: 100,
+            lzcLevel: 50, targetLzcLevel: 50,
+            lzcTop: 50, lzcMid: 50, lzcBot: 50,
+            rodY: 90, targetRodY: 90, 
+            coreTemp: 0.5, targetCoreTemp: 0.5,
+            pumpSpeed: 0.05, compressorSpeed: 0
+        };
+
+        // 수동 조작 이벤트 리스너
+        manualPowerSlider.addEventListener('input', (e) => {
+            if(currentScenario) clearTimeout(currentScenario); // 수동 조작 시 자동 시나리오 중지
+            
+            const targetPwr = parseInt(e.target.value);
+            manualPowerDisplay.textContent = `${targetPwr}%`;
+            simState.targetPower = targetPwr;
+            
+            // LZC 제어 로직: 출력을 높이려면(targetPwr > 100) 수위를 낮춤(중성자 흡수 감소)
+            // 출력을 낮추려면(targetPwr < 100) 수위를 높임(중성자 흡수 증가)
+            let reqLzcLevel = 50 + (100 - targetPwr) * 1.5; 
+            reqLzcLevel = Math.max(5, Math.min(95, reqLzcLevel)); 
+            
+            simState.targetLzcLevel = reqLzcLevel;
+
+            // 시각적 피드백
+            if (targetPwr < simState.power) {
+                simState.pumpSpeed = 0.4;
+                simState.compressorSpeed = 0.01;
+                addLog(`수동 제어: 목표 출력 ${targetPwr}% ➜ LZC 수위 상승 중 (펌프 가동)`, 'action');
+            } else if (targetPwr > simState.power) {
+                simState.pumpSpeed = 0.01;
+                simState.compressorSpeed = 0.4;
+                addLog(`수동 제어: 목표 출력 ${targetPwr}% ➜ LZC 수위 하강 중 (압축기 가동)`, 'action');
+            }
+            
+            simState.targetCoreTemp = Math.max(0.1, Math.min(0.9, (targetPwr - 50) / 70));
+        });
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Camera Rotation Lerp
+            currentRotation.x += (targetRotation.x - currentRotation.x) * 0.1;
+            currentRotation.y += (targetRotation.y - currentRotation.y) * 0.1;
+            coreGroup.rotation.x = currentRotation.x;
+            coreGroup.rotation.y = currentRotation.y;
+
+            // State Lerp
+            simState.power += (simState.targetPower - simState.power) * 0.05;
+            simState.lzcLevel += (simState.targetLzcLevel - simState.lzcLevel) * 0.05;
+            
+            // 상/중/하부 수위 시뮬레이션 (HUD용)
+            simState.lzcTop += ((simState.targetLzcLevel + Math.sin(Date.now()*0.001)*5) - simState.lzcTop) * 0.05;
+            simState.lzcMid += ((simState.targetLzcLevel) - simState.lzcMid) * 0.05;
+            simState.lzcBot += ((simState.targetLzcLevel - Math.sin(Date.now()*0.001)*5) - simState.lzcBot) * 0.05;
+
+            // LZC HUD 업데이트
+            hudWaterTop.style.height = `${Math.max(0, Math.min(100, simState.lzcTop))}%`;
+            hudWaterMid.style.height = `${Math.max(0, Math.min(100, simState.lzcMid))}%`;
+            hudWaterBot.style.height = `${Math.max(0, Math.min(100, simState.lzcBot))}%`;
+
+            simState.rodY += (simState.targetRodY - simState.rodY) * 0.04;
+            simState.coreTemp += (simState.targetCoreTemp - simState.coreTemp) * 0.02;
+
+            // UI
+            powerReadout.textContent = `${Math.round(simState.power)}%`;
+            powerBar.style.width = `${Math.round(simState.power)}%`;
+            lzcReadout.textContent = `${Math.round(simState.lzcLevel)}%`;
+            lzcBar.style.width = `${Math.round(simState.lzcLevel)}%`;
+
+            // 3D Updates
+            controlRods.forEach(rod => rod.position.y = simState.rodY);
+            
+            const waterHeight = (simState.lzcLevel / 100) * 140;
+            lzcWaterMeshes.forEach(water => water.scale.y = Math.max(0.1, waterHeight));
+
+            const coolColor = new THREE.Color(0x1e3a8a); // Blue
+            const hotColor = new THREE.Color(0xef4444);  // Red
+            const currentColor = coolColor.clone().lerp(hotColor, simState.coreTemp);
+            
+            fuelChannels.forEach(tube => {
+                tube.material.emissive = currentColor;
+                tube.material.emissiveIntensity = 0.5 + (simState.coreTemp * 2);
+            });
+            coreLight.color = currentColor;
+            coreLight.intensity = 2 + (simState.coreTemp * 3);
+
+            // Detectors blink based on power
+            const time = Date.now() * 0.005;
+            const blinkRate = simState.power / 50;
+            detectors.forEach(det => {
+                det.material.opacity = 0.4 + Math.sin(time * blinkRate) * 0.6;
+            });
+
+            // External Components Animation
+            pump.rotation.x += simState.pumpSpeed;
+            compressor.scale.y = 1 + Math.sin(time * simState.compressorSpeed * 10) * 0.1; // Pulsing effect
+            
+            // 수동 조작 시 목표 도달하면 펌프/압축기 속도 안정화
+            if(Math.abs(simState.power - simState.targetPower) < 1) {
+                simState.pumpSpeed = 0.05;
+                simState.compressorSpeed = 0.01;
+            }
+
+            // Pipe visual feedback based on flow
+            pipeSupply.material.emissiveIntensity = simState.pumpSpeed * 2;
+            pipeSupply.material.emissive.setHex(0x3b82f6);
+            pipeHelium.material.emissiveIntensity = simState.compressorSpeed * 2;
+            pipeHelium.material.emissive.setHex(0xf59e0b);
+
+            renderer.render(scene, camera);
+        }
+
+        window.onload = () => {
+            animate();
+            playScenario('stable');
+        };
+
+        // --- Scenario Logic ---
+        function addLog(message, type = 'normal') {
+            const span = document.createElement('span');
+            span.textContent = `> ${message}`;
+            if (type === 'alert') span.className = 'text-red-400 font-bold';
+            else if (type === 'action') span.className = 'text-blue-400 font-bold';
+            else span.className = 'text-green-400';
+            
+            logs.appendChild(span);
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+
+        function playScenario(type) {
+            if(currentScenario) clearTimeout(currentScenario);
+            logs.innerHTML = ''; 
+
+            if (type === 'stable') {
+                addLog('시나리오: 정상 출력 유지 모드', 'normal');
+                simState.targetPower = 100;
+                simState.targetLzcLevel = 50;
+                simState.targetRodY = 90; // Withdrawn
+                simState.targetCoreTemp = 0.5;
+                simState.pumpSpeed = 0.05; // Idle pump
+                simState.compressorSpeed = 0.01; // Idle compressor
+                manualPowerSlider.value = 100;
+                manualPowerDisplay.textContent = '100%';
+                addLog('출력 100%, LZC 구획 수위 50%, 제어봉 인출 상태.');
+                addLog('감지기(초록색 큐브)가 정상 범위에서 중성자속을 모니터링합니다.');
+            } 
+            else if (type === 'powerSpike') {
+                addLog('⚠️ 경고: 국부 출력 급상승 탐지!', 'alert');
+                
+                simState.targetPower = 125;
+                simState.targetCoreTemp = 0.9; 
+                
+                currentScenario = setTimeout(() => {
+                    addLog('🛠️ 1단계 제어: LZC 경수 주입 (펌프 가동)', 'action');
+                    simState.targetLzcLevel = 90; 
+                    simState.pumpSpeed = 0.5; // Fast pump
+                    simState.compressorSpeed = 0.01;
+                    
+                    currentScenario = setTimeout(() => {
+                        addLog('🛠️ 2단계 제어: 수직 제어봉(Adjuster/Shutoff) 삽입', 'action');
+                        simState.targetRodY = 20; // Insert rods
+                        
+                        currentScenario = setTimeout(() => {
+                            addLog('✅ 중성자 흡수 증가. 출력 안정화 중...', 'normal');
+                            simState.targetPower = 100;
+                            simState.targetCoreTemp = 0.5;
+                            
+                            currentScenario = setTimeout(() => {
+                                addLog('출력 100% 복귀 완료. 제어봉/LZC 수위 재조정.', 'green');
+                                simState.targetRodY = 70; 
+                                simState.targetLzcLevel = 60;
+                                simState.pumpSpeed = 0.05; // Return to idle
+                                simState.compressorSpeed = 0.01;
+                            }, 2500);
+                        }, 2000);
+                    }, 1500);
+                }, 1000);
+            }
+            else if (type === 'powerDrop') {
+                addLog('⚠️ 경고: 원자로 출력 저하 탐지', 'alert');
+                
+                simState.targetPower = 75;
+                simState.targetCoreTemp = 0.1; 
+                
+                currentScenario = setTimeout(() => {
+                    addLog('🛠️ 제어 개입: 제어봉 완전 인출 & LZC 경수 배출 (헬륨 압축기 가동)', 'action');
+                    simState.targetRodY = 110; // Withdraw fully
+                    simState.targetLzcLevel = 10; // Drain LZC
+                    simState.pumpSpeed = 0.01; // Stop pump
+                    simState.compressorSpeed = 0.5; // Fast compressor (pushing water out)
+                    
+                    currentScenario = setTimeout(() => {
+                        addLog('✅ 중성자 연쇄 반응 증가 유도. 출력 상승 중...', 'normal');
+                        simState.targetPower = 100;
+                        simState.targetCoreTemp = 0.5;
+                        
+                        currentScenario = setTimeout(() => {
+                            addLog('출력 100% 복귀 완료. 안정 상태.', 'green');
+                            simState.targetRodY = 90;
+                            simState.targetLzcLevel = 50;
+                            simState.pumpSpeed = 0.05;
+                            simState.compressorSpeed = 0.01;
+                        }, 2500);
+                    }, 2000);
+                }, 1500);
+            }
+        }
+    </script>
+</body>
+</html>
